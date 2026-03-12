@@ -11,15 +11,16 @@ function getField(chunk: any, ...keys: string[]) {
 
 // ── Slideshow ─────────────────────────────────────────────────────────────────
 
-const Slideshow = ({ images }: { images: string[] }) => {
+const Slideshow = ({ images, paused }: { images: string[]; paused: boolean }) => {
   const [index, setIndex] = useState(0);
 
+  useEffect(() => { setIndex(0); }, [images]);
+
   useEffect(() => {
-    setIndex(0);
-    if (images.length <= 1) return;
+    if (images.length <= 1 || paused) return;
     const id = setInterval(() => setIndex(prev => (prev + 1) % images.length), 5000);
     return () => clearInterval(id);
-  }, [images]);
+  }, [images, paused]);
 
   if (!images || images.length === 0) return <div className="absolute inset-0 bg-zinc-950" />;
 
@@ -90,10 +91,13 @@ const App = () => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [speechPos, setSpeechPos] = useState({ charIndex: 0, charLength: 0 });
   const [paused, setPaused] = useState(false);
+  const [demoReady, setDemoReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const wordTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const blobUrlRef = useRef<string | null>(null);
+  const currentSpeakTextRef = useRef('');
+  const currentSpeakDurationRef = useRef(0);
   const currentIndexRef = useRef(currentIndex);
   const feedRef = useRef(feed);
 
@@ -110,12 +114,12 @@ const App = () => {
   }, []);
 
   useEffect(() => {
-    if (feed.length > 0) {
+    if (feed.length > 0 && (!isDemo || demoReady)) {
       setSpeechPos({ charIndex: 0, charLength: 0 });
       setPaused(false);
       speak(getField(feed[currentIndex], 'script', 'Script') || '', feed[currentIndex]);
     }
-  }, [currentIndex, feed]);
+  }, [currentIndex, feed, demoReady]);
 
   const stopAudio = () => {
     wordTimersRef.current.forEach(t => clearTimeout(t));
@@ -124,14 +128,17 @@ const App = () => {
     if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = null; }
   };
 
-  const scheduleWordHighlights = (text: string, durationSec: number) => {
+  const scheduleWordHighlights = (text: string, durationSec: number, offsetSec = 0) => {
+    wordTimersRef.current.forEach(t => clearTimeout(t));
     const words = text.split(/\s+/);
     const msPerWord = (durationSec * 1000) / words.length;
     let charIndex = 0;
-    wordTimersRef.current = words.map((word, i) => {
+    wordTimersRef.current = words.flatMap((word, i) => {
       const ci = charIndex; const cl = word.length;
       charIndex += word.length + 1;
-      return setTimeout(() => setSpeechPos({ charIndex: ci, charLength: cl }), i * msPerWord);
+      const delay = i * msPerWord - offsetSec * 1000;
+      if (delay < 0) { setSpeechPos({ charIndex: ci, charLength: cl }); return []; }
+      return [setTimeout(() => setSpeechPos({ charIndex: ci, charLength: cl }), delay)];
     });
   };
 
@@ -152,7 +159,11 @@ const App = () => {
 
       const el = audioRef.current!;
       el.src = url;
-      el.onloadedmetadata = () => scheduleWordHighlights(text, el.duration);
+      el.onloadedmetadata = () => {
+        currentSpeakTextRef.current = text;
+        currentSpeakDurationRef.current = el.duration;
+        scheduleWordHighlights(text, el.duration);
+      };
       el.onended = () => {
         const idx = currentIndexRef.current;
         const f = feedRef.current;
@@ -168,9 +179,13 @@ const App = () => {
     if (paused) {
       audioRef.current?.play();
       videoRef.current?.play();
+      const offset = audioRef.current?.currentTime || 0;
+      scheduleWordHighlights(currentSpeakTextRef.current, currentSpeakDurationRef.current, offset);
     } else {
       audioRef.current?.pause();
       videoRef.current?.pause();
+      wordTimersRef.current.forEach(t => clearTimeout(t));
+      wordTimersRef.current = [];
     }
     setPaused(p => !p);
   };
@@ -288,6 +303,18 @@ const App = () => {
   return (
     <div className="h-screen w-full bg-black flex items-center justify-center overflow-hidden touch-none font-sans">
       <audio ref={audioRef} style={{ display: 'none' }} />
+      {isDemo && !demoReady && (
+        <div
+          className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black cursor-pointer"
+          onClick={() => setDemoReady(true)}
+        >
+          <div className="w-20 h-20 rounded-full bg-white flex items-center justify-center mb-6 shadow-[0_0_60px_rgba(255,255,255,0.2)]">
+            <Play className="w-9 h-9 text-black ml-1" />
+          </div>
+          <p className="text-white font-black italic text-2xl uppercase tracking-tight">Tap to start</p>
+          <p className="text-white/30 text-xs font-bold uppercase tracking-widest mt-2">TikDoc Demo</p>
+        </div>
+      )}
       {/* Phone frame */}
       <div className="relative h-full max-w-[420px] w-full bg-black border-x border-white/5 overflow-hidden shadow-2xl">
         <AnimatePresence mode="wait">
@@ -300,7 +327,7 @@ const App = () => {
           >
             {/* Top half: diagram slideshow + hook + rolling captions */}
             <div className="h-1/2 w-full relative bg-zinc-950 overflow-hidden border-b-2 border-white/10">
-              <Slideshow images={images} />
+              <Slideshow images={images} paused={paused} />
 
               {/* Hook text — top strip */}
               <div className="absolute top-0 left-0 right-0 z-20 px-4 pt-3 pb-6 bg-gradient-to-b from-black/70 to-transparent">
