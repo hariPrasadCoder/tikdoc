@@ -1,0 +1,9 @@
+services:
+  tikdoc:
+    build: .
+    ports:
+      - "5005:5005"
+    environment:
+      - NODE_ENV=production
+      - PORT=5005
+    restart: unless-stopped
