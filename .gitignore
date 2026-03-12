@@ -1,0 +1,68 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.npm
+.eslintcache
+.stylelintcache
+.node_repl_history
+*.module.chunk.js
+
+# Build and Dist
+dist/
+dist-ssr/
+build/
+out/
+.next/
+.nuxt/
+.cache/
+.parcel-cache/
+.turbo/
+
+# Environment and Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.local
+*.pem
+*.key
+
+# Server-specific
+server/.env
+server/db.json
+server/server.log
+server/uploads/
+
+# Common Ignores
+*.tmp
+*.bak
+*.log
+logs/
+*.tsbuildinfo
+coverage/
+.nyc_output/
+
+# OS
+.DS_Store
+*.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDEs/Editors
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.sw?
+*.swo
+*.swn
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sublime-project
+*.sublime-workspace
