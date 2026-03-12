@@ -31,7 +31,7 @@ const Slideshow = ({ images }: { images: string[] }) => {
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.8 }}
-        src={`data:image/png;base64,${images[index]}`}
+        src={`data:image/jpeg;base64,${images[index]}`}
         className="absolute inset-0 w-full h-full object-contain z-0 bg-white"
       />
     </AnimatePresence>
@@ -236,8 +236,6 @@ const App = () => {
                 </p>
               </div>
 
-              {/* Subtitles */}
-              <SubtitleBar script={script} charIndex={speechPos.charIndex} charLength={speechPos.charLength} />
             </div>
 
             {/* Bottom half: brain rot video */}
@@ -256,6 +254,14 @@ const App = () => {
                 className="w-full h-full object-cover grayscale-[30%]"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+              {/* Subtitles — top of brain rot video */}
+              <div className="absolute top-0 left-0 right-0 z-30 bg-gradient-to-b from-black via-black/80 to-transparent pt-3 pb-8 px-4">
+                <p className="text-center text-[13px] font-bold leading-snug">
+                  <span className="text-white/50">{script.slice(0, speechPos.charIndex)}</span>
+                  <span className="text-yellow-300 text-[15px] font-black">{script.slice(speechPos.charIndex, speechPos.charIndex + speechPos.charLength)}</span>
+                  <span className="text-white/50">{script.slice(speechPos.charIndex + speechPos.charLength)}</span>
+                </p>
+              </div>
               <div className="absolute bottom-10 left-8 z-30 flex items-center gap-4">
                 <div className="w-12 h-12 rounded-full bg-white flex items-center justify-center text-black font-black italic shrink-0">
                   TD

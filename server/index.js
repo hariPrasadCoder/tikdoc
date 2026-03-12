@@ -40,18 +40,25 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Helper: Generate diagram image via Imagen 4
+// Helper: Generate diagram image via Gemini 3 Pro Image
 async function generateDiagramImage(diagramDescription) {
   try {
-    const url = `${BASE_URL}/models/imagen-4.0-generate-001:predict?key=${API_KEY}`;
-    const payload = {
-      instances: [{
-        prompt: `${diagramDescription}. Visual style: clean modern infographic illustration, bold flat colors, minimal readable text labels only (no hex codes, no brackets, no technical notation), white background, clear directional arrows, professional and colorful. Illustration only, no photographs.`
-      }],
-      parameters: { sampleCount: 1, aspectRatio: "1:1" }
-    };
-    const response = await axios.post(url, payload);
-    return response.data.predictions?.[0]?.bytesBase64Encoded || null;
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-3-pro-image-preview',
+      generationConfig: { responseModalities: ['IMAGE', 'TEXT'] }
+    });
+    const result = await model.generateContent(
+      `Create a stunning, colorful visual to represent: ${diagramDescription}.
+      Style: vibrant bold colors, modern flat design, professional infographic aesthetic.
+      Use rich color blocks, gradients, and icons to tell the story visually.
+      Minimal text — use short 1-3 word labels only where essential.
+      Prefer icons, shapes, arrows, and illustrations over text.
+      White or very light background. Clean, sharp, high-contrast. No photos. No clip art. No handwriting.`
+    );
+    const parts = result.response.candidates[0].content.parts;
+    const imagePart = parts.find(p => p.inlineData);
+    if (!imagePart) return null;
+    return { data: imagePart.inlineData.data, mimeType: imagePart.inlineData.mimeType };
   } catch (err) {
     console.error('Diagram Gen Failed:', err.message);
     return null;
@@ -66,7 +73,7 @@ async function processDocument(content) {
     Return ONLY a valid JSON array where each object has EXACTLY these keys:
     - "hook": A provocative rage-bait hook (10 words max)
     - "script": Fast-paced spoken explanation (30-40 words, conversational, no jargon)
-    - "visualPrompts": An array of exactly 3 image descriptions for diagram visuals. Each must describe a clean diagram or chart type with its content — like a flowchart, bar chart, timeline, process diagram, or comparison table. Describe the VISUAL STRUCTURE only: shapes, flow, sections, and plain word labels. Do NOT include hex color codes, brackets, parentheses with values, percentages, or any technical notation. Keep labels short plain words. Example: "A flowchart with four steps: Problem Discovery leads to Solution Design leads to Build leads to Launch, connected by arrows in a top-down layout"
+    - "visualPrompts": An array of exactly 3 visual descriptions. Each should describe a compelling, colorful illustration or diagram that visually communicates the core idea — bold infographics, icon-driven flowcharts, colorful comparisons, timelines, or conceptual illustrations. Focus on the CONCEPT and visual metaphor. Very minimal text in the image — short 1-3 word labels only where essential. Use vivid, concrete visual language. Example: "A bold colorful flowchart with three stages: red Identify box, yellow Analyze box, green Solve box, connected by thick arrows, with small icons representing each stage"
 
     Document: ${content}
   `;
@@ -104,10 +111,13 @@ app.post('/upload-doc', upload.single('doc'), async (req, res) => {
     const richChunks = await Promise.all(chunks.map(async (chunk) => {
       const prompts = (chunk.visualPrompts || []).slice(0, 3);
       console.log('Generating diagrams for:', chunk.hook || 'beat');
-      const images = await Promise.all(prompts.map(p => generateDiagramImage(p)));
+      const imageResults = await Promise.all(prompts.map(p => generateDiagramImage(p)));
+      const images = imageResults.filter(Boolean).map(r => r.data);
+      const imageMimeType = imageResults.find(Boolean)?.mimeType || 'image/jpeg';
       return {
         id: uuidv4(),
-        images: images.filter(Boolean),
+        images,
+        imageMimeType,
         ...chunk,
       };
     }));
