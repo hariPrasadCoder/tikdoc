@@ -60,6 +60,29 @@ const SubtitleBar = ({ script, charIndex, charLength }: { script: string; charIn
 
 // ── App ───────────────────────────────────────────────────────────────────────
 
+// Build a WAV blob from raw L16 PCM base64
+function pcmBase64ToWavBlob(base64: string, sampleRate = 24000): Blob {
+  const pcm = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  const numChannels = 1, bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+  const blockAlign = numChannels * bitsPerSample / 8;
+  const dataSize = pcm.byteLength;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const v = new DataView(buffer);
+  const enc = (s: string, o: number) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  enc('RIFF', 0); v.setUint32(4, 36 + dataSize, true);
+  enc('WAVE', 8); enc('fmt ', 12);
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, numChannels, true); v.setUint32(24, sampleRate, true);
+  v.setUint32(28, byteRate, true); v.setUint16(32, blockAlign, true);
+  v.setUint16(34, bitsPerSample, true); enc('data', 36);
+  v.setUint32(40, dataSize, true);
+  new Uint8Array(buffer).set(pcm, 44);
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+const isDemo = window.location.pathname === '/demo';
+
 const App = () => {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
@@ -68,50 +91,92 @@ const App = () => {
   const [speechPos, setSpeechPos] = useState({ charIndex: 0, charLength: 0 });
   const [paused, setPaused] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const synth = window.speechSynthesis;
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const wordTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const blobUrlRef = useRef<string | null>(null);
+  const currentIndexRef = useRef(currentIndex);
+  const feedRef = useRef(feed);
+
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+  useEffect(() => { feedRef.current = feed; }, [feed]);
+
+  // Auto-load demo feed on /demo route
+  useEffect(() => {
+    if (!isDemo) return;
+    axios.get('http://localhost:5005/demo-feed').then(res => {
+      setFeed(res.data);
+      setCurrentIndex(0);
+    });
+  }, []);
 
   useEffect(() => {
     if (feed.length > 0) {
       setSpeechPos({ charIndex: 0, charLength: 0 });
       setPaused(false);
-      speak(getField(feed[currentIndex], 'script', 'Script') || '');
+      speak(getField(feed[currentIndex], 'script', 'Script') || '', feed[currentIndex]);
     }
   }, [currentIndex, feed]);
 
-  const speak = (text: string) => {
-    synth.cancel();
+  const stopAudio = () => {
+    wordTimersRef.current.forEach(t => clearTimeout(t));
+    wordTimersRef.current = [];
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ''; }
+    if (blobUrlRef.current) { URL.revokeObjectURL(blobUrlRef.current); blobUrlRef.current = null; }
+  };
+
+  const scheduleWordHighlights = (text: string, durationSec: number) => {
+    const words = text.split(/\s+/);
+    const msPerWord = (durationSec * 1000) / words.length;
+    let charIndex = 0;
+    wordTimersRef.current = words.map((word, i) => {
+      const ci = charIndex; const cl = word.length;
+      charIndex += word.length + 1;
+      return setTimeout(() => setSpeechPos({ charIndex: ci, charLength: cl }), i * msPerWord);
+    });
+  };
+
+  const speak = async (text: string, chunk: any) => {
+    stopAudio();
     if (!text) return;
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.3;
-    utterance.onboundary = (e: SpeechSynthesisEvent) => {
-      if (e.name === 'word') {
-        const rest = text.slice(e.charIndex);
-        const nextSpace = rest.search(/\s/);
-        const charLength = e.charLength || (nextSpace === -1 ? rest.length : nextSpace);
-        setSpeechPos({ charIndex: e.charIndex, charLength });
+    try {
+      let url: string;
+      if (chunk?.audio && chunk?.audioMimeType) {
+        const sampleRate = parseInt(chunk.audioMimeType.match(/rate=(\d+)/)?.[1] || '24000');
+        url = URL.createObjectURL(pcmBase64ToWavBlob(chunk.audio, sampleRate));
+      } else {
+        const res = await axios.post('http://localhost:5005/tts', { text, voice: 'Puck' });
+        const sampleRate = parseInt(res.data.mimeType.match(/rate=(\d+)/)?.[1] || '24000');
+        url = URL.createObjectURL(pcmBase64ToWavBlob(res.data.audio, sampleRate));
       }
-    };
-    utterance.onend = () => {
-      if (currentIndex < feed.length - 1) {
-        setTimeout(() => setCurrentIndex(prev => prev + 1), 1500);
-      }
-    };
-    synth.speak(utterance);
+      blobUrlRef.current = url;
+
+      const el = audioRef.current!;
+      el.src = url;
+      el.onloadedmetadata = () => scheduleWordHighlights(text, el.duration);
+      el.onended = () => {
+        const idx = currentIndexRef.current;
+        const f = feedRef.current;
+        if (idx < f.length - 1) setTimeout(() => setCurrentIndex(prev => prev + 1), 1500);
+      };
+      await el.play();
+    } catch (err) {
+      console.error('TTS failed:', err);
+    }
   };
 
   const togglePause = () => {
     if (paused) {
-      synth.resume();
+      audioRef.current?.play();
       videoRef.current?.play();
     } else {
-      synth.pause();
+      audioRef.current?.pause();
       videoRef.current?.pause();
     }
     setPaused(p => !p);
   };
 
   const goTo = (next: number) => {
-    synth.cancel();
+    stopAudio();
     setCurrentIndex(next);
   };
 
@@ -136,6 +201,13 @@ const App = () => {
 
   // ── Upload screen ───────────────────────────────────────────────────────────
   if (feed.length === 0) {
+    if (isDemo) {
+      return (
+        <div className="min-h-screen bg-black text-white flex items-center justify-center">
+          <Loader2 className="animate-spin w-10 h-10 text-white/40" />
+        </div>
+      );
+    }
     return (
       <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-4 relative overflow-hidden font-sans">
         <div className="absolute inset-0 bg-gradient-to-br from-indigo-950/40 via-black to-red-950/40" />
@@ -167,7 +239,7 @@ const App = () => {
             </div>
             <div className="text-center">
               <p className="text-2xl font-black italic uppercase tracking-tight">Ready to rot?</p>
-              <p className="text-zinc-500 font-medium">Drop your technical PDF or Markdown here.</p>
+              <p className="text-zinc-500 font-medium">Drop your documents here.</p>
             </div>
           </div>
 
@@ -215,6 +287,7 @@ const App = () => {
 
   return (
     <div className="h-screen w-full bg-black flex items-center justify-center overflow-hidden touch-none font-sans">
+      <audio ref={audioRef} style={{ display: 'none' }} />
       {/* Phone frame */}
       <div className="relative h-full max-w-[420px] w-full bg-black border-x border-white/5 overflow-hidden shadow-2xl">
         <AnimatePresence mode="wait">

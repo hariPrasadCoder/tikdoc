@@ -110,14 +110,39 @@ app.post('/upload-doc', upload.single('doc'), async (req, res) => {
     
     const richChunks = await Promise.all(chunks.map(async (chunk) => {
       const prompts = (chunk.visualPrompts || []).slice(0, 3);
-      console.log('Generating diagrams for:', chunk.hook || 'beat');
-      const imageResults = await Promise.all(prompts.map(p => generateDiagramImage(p)));
+      const script = chunk.script || chunk.Script || '';
+      console.log('Generating diagrams + TTS for:', chunk.hook || 'beat');
+
+      const [imageResults, ttsResult] = await Promise.all([
+        Promise.all(prompts.map(p => generateDiagramImage(p))),
+        (async () => {
+          try {
+            const r = await axios.post(
+              `${BASE_URL}/models/gemini-2.5-pro-preview-tts:generateContent?key=${API_KEY}`,
+              {
+                contents: [{ parts: [{ text: script }] }],
+                generationConfig: {
+                  responseModalities: ['AUDIO'],
+                  speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } }
+                }
+              }
+            );
+            const part = r.data.candidates[0].content.parts.find(p => p.inlineData);
+            return part ? { audio: part.inlineData.data, audioMimeType: part.inlineData.mimeType } : null;
+          } catch (e) {
+            console.error('TTS failed for chunk:', e.message);
+            return null;
+          }
+        })()
+      ]);
+
       const images = imageResults.filter(Boolean).map(r => r.data);
       const imageMimeType = imageResults.find(Boolean)?.mimeType || 'image/jpeg';
       return {
         id: uuidv4(),
         images,
         imageMimeType,
+        ...(ttsResult || {}),
         ...chunk,
       };
     }));
@@ -148,6 +173,42 @@ app.get('/feed', (req, res) => {
     };
   });
   res.json(feed);
+});
+
+app.get('/demo-feed', (req, res) => {
+  const demoDb = low(new FileSync('demo-db.json'));
+  const chunks = demoDb.get('chunks').value();
+  const brainRotDir = path.join(__dirname, 'uploads/brain-rot');
+  const brainRotFiles = fs.readdirSync(brainRotDir).filter(f => f.endsWith('.mp4'));
+  const segmentDuration = 30;
+  const feed = chunks.map((chunk, index) => {
+    const videoFile = brainRotFiles[index % brainRotFiles.length];
+    const startTime = Math.floor(index / brainRotFiles.length) * segmentDuration;
+    return { ...chunk, brainRotVideo: `http://localhost:${port}/uploads/brain-rot/${videoFile}`, startTime };
+  });
+  res.json(feed);
+});
+
+app.post('/tts', async (req, res) => {
+  try {
+    const { text, voice = 'Puck' } = req.body;
+    const response = await axios.post(
+      `${BASE_URL}/models/gemini-2.5-pro-preview-tts:generateContent?key=${API_KEY}`,
+      {
+        contents: [{ parts: [{ text }] }],
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
+        }
+      }
+    );
+    const part = response.data.candidates[0].content.parts.find(p => p.inlineData);
+    if (!part) return res.status(500).json({ error: 'No audio generated' });
+    res.json({ audio: part.inlineData.data, mimeType: part.inlineData.mimeType });
+  } catch (err) {
+    console.error('TTS error:', err.response?.data || err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(port, () => {
